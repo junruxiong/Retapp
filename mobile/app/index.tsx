@@ -11,6 +11,7 @@ import {
   RTCPeerConnection,
   RTCSessionDescription,
   mediaDevices,
+  RTCView,
 } from "react-native-webrtc";
 import AnimatedMeshGradientView from "@/components/AnimatedMeshGradient";
 import { Link } from "expo-router";
@@ -23,9 +24,12 @@ export default function App() {
   const [callDuration, setCallDuration] = useState(0);
   const [voice, setVoice] = useState<Voice>(Voice.ALLOY);
   const [isLoading, setIsLoading] = useState(false);
+  const [localStream, setLocalStream] = useState<any>(null);
   const pc = useRef<RTCPeerConnection | null>(null);
   const dc = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null | any>(null);
+
+  console.log("localStream", localStream);
 
   const startCall = async () => {
     if (isCallActive || pc.current || isLoading) return;
@@ -48,12 +52,15 @@ export default function App() {
 
       const key = response.client_secret.value;
 
-      // 2) make PeerConnection
-      pc.current = new RTCPeerConnection();
+      // 2) make PeerConnection with ICE servers for better connectivity
+      pc.current = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
       dc.current = pc.current.createDataChannel("oai-events");
       dc.current.onmessage = ({ data }: { data: string }) => {
         try {
           const event = JSON.parse(data);
+          console.log("HHHHHH", event);
           console.log("Event:", JSON.stringify(event, null, 2));
 
           // Update transcript for both delta updates and completed transcripts
@@ -71,25 +78,64 @@ export default function App() {
       };
 
       // 3) add mic audio
-      const stream = await mediaDevices.getUserMedia({ audio: true });
-      stream
-        .getTracks()
-        .forEach((track) => pc.current!.addTrack(track, stream));
+      const stream = await mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          facingMode: "environment", // Use back camera
+          // width: 720,
+          // height: 1280,
+          frameRate: 30,
+        },
+      });
+
+      // Store stream for preview
+      setLocalStream(stream);
+
+      // Add connection state monitoring
+      (pc.current as any).oniceconnectionstatechange = () => {
+        console.log("ICE connection state:", pc.current?.iceConnectionState);
+
+        // If connection state is disconnected or failed, reconnect
+        if (
+          pc.current?.iceConnectionState === "disconnected" ||
+          pc.current?.iceConnectionState === "failed"
+        ) {
+          console.log("Connection state problem detected");
+        }
+      };
+
+      // Log track information
+      const audioTracks = stream.getAudioTracks();
+      console.log("Audio tracks:", audioTracks.length);
+      console.log("Audio track settings:", audioTracks[0]?.getSettings());
+
+      // Log video tracks info if any
+      const videoTracks = stream.getVideoTracks();
+      console.log("Video tracks:", videoTracks);
+      console.log("Video track settings:", videoTracks[0]?.getSettings());
+
+      // Add tracks to peer connection with logging
+      stream.getTracks().forEach((track) => {
+        console.log(`Adding ${track.kind} track to peer connection`);
+        pc.current!.addTrack(track, stream);
+
+        // Monitor track status
+        (track as any).onended = () => {
+          console.log(`${track.kind} track ended`);
+        };
+      });
 
       // 4) offer → SDP POST
       const offer = await pc.current.createOffer({});
       await pc.current.setLocalDescription(offer);
-      const res = await fetch(
-        `https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/sdp",
-          },
-          body: offer.sdp,
-        }
-      );
+      const res = await fetch(`http://192.168.0.120:8000/api/realtime`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/sdp",
+        },
+        body: offer.sdp,
+      });
       const answerSdp = await res.text();
       await pc.current.setRemoteDescription(
         new RTCSessionDescription({ type: "answer", sdp: answerSdp })
@@ -120,6 +166,13 @@ export default function App() {
       pc.current.close();
       pc.current = null;
     }
+
+    // Clean up local stream
+    if (localStream) {
+      localStream.getTracks().forEach((track: any) => track.stop());
+      setLocalStream(null);
+    }
+
     setIsCallActive(false);
     setTranscript("");
 
@@ -154,6 +207,18 @@ export default function App() {
     <AnimatedMeshGradientView>
       <View style={styles.container}>
         <SettingsMenu voice={voice} setVoice={setVoice} />
+
+        {/* Video Preview */}
+        {localStream && (
+          <View style={styles.videoContainer}>
+            <RTCView
+              streamURL={localStream.toURL()}
+              style={styles.videoPreview}
+              objectFit="cover"
+            />
+          </View>
+        )}
+
         <View
           style={{
             flexDirection: "row",
@@ -342,5 +407,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 13,
     borderRadius: 20, // stays large
+  },
+  videoContainer: {
+    width: "100%",
+    height: 200,
+    marginBottom: 20,
+  },
+  videoPreview: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 10,
   },
 });

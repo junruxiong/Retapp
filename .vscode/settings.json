@@ -40,9 +40,9 @@
   "[jsonc]": {
     "editor.defaultFormatter": "vscode.json-language-features"
   },
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv",
+  "python.defaultInterpreterPath": "${workspaceFolder}/server/.venv/bin/python",
   "python.analysis.extraPaths": [
-    "./backend/app/agents.py"
+    "${workspaceFolder}/server/app.py"
   ],
   "markdownlint.config": {
     "MD007": {"indent": 4}
